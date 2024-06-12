@@ -27,29 +27,73 @@
             inputs.services-flake.processComposeModules.default
           ];
 
-          services.tempo.tempo.enable = true;
+          services.tempo.tempo = {
+            enable = true;
+            extraConfig = {
+              compactor = {
+                compaction = { block_retention = "1h"; };
+              };
+              ingester = {max_block_duration = "5m";};
+              metrics_generator = {
+                registry = {
+                  external_labels = {
+                    source = "tempo";
+                  };
+                };
+                storage = {
+                  path = "/tmp/tempo/generator/wal";
+                  remote_write = [
+                    {
+                      send_exemplars = true;
+                      url = "${prometheusUrl}/api/v1/write";
+                    }
+                  ];
+                };
+              };
+              overrides = {defaults = {metrics_generator = {processors = ["service-graphs" "span-metrics"];};};};
+              query_frontend = {
+                search = {
+                  duration_slo = "5s";
+                  throughput_bytes_slo = 1073741824;
+                };
+                trace_by_id = {duration_slo = "5s";};
+              };
+            };
+          };
           services.grafana.grafana = {
             enable = true;
             http_port = 4000;
-            extraConf."auth.anonymous" = {
-              enabled = true;
-              org_role = "Admin";
+            extraConf = {
+              "auth.anonymous" = {
+                enabled = true;
+                org_role = "Admin";
+              };
+              feature_toggles = {
+                enable = "traceqlEditor";
+              };
             };
-
 
             datasources = [
               {
                 name = "Tempo";
                 type = "tempo";
+                uid = "tempo";
                 access = "proxy";
                 url = "http://${tempoHostPort}";
+                jsonData = {
+                  httpMethod = "GET";
+                  serviceMap.datasourceUid = "prometheus";
+                };
+                orgId = 1;
               }
               {
                 access = "proxy";
                 basicAuth = false;
                 editable = false;
                 isDefault = false;
-                jsonData = {httpMethod = "GET";};
+                jsonData = {
+                  httpMethod = "GET";
+                };
                 name = "Prometheus";
                 orgId = 1;
                 type = "prometheus";
@@ -57,27 +101,14 @@
                 url = prometheusUrl;
                 version = 1;
               }
-              # {
-              #   access = "proxy";
-              #   apiVersion = 1;
-              #   basicAuth = false;
-              #   editable = false;
-              #   isDefault = true;
-              #   jsonData = {
-              #     httpMethod = "GET";
-              #     serviceMap = {datasourceUid = "prometheus";};
-              #   };
-              #   name = "Tempo";
-              #   orgId = 1;
-              #   type = "tempo";
-              #   uid = "tempo";
-              #   url = "http://tempo:3200";
-              #   version = 1;
-              # }
             ];
           };
           services.prometheus.prometheus = {
-            enable = false;
+            enable = true;
+            extraFlags = [
+              "--web.enable-remote-write-receiver"
+              "--enable-feature=exemplar-storage"
+            ];
             extraConfig = {
               global = {
                 evaluation_interval = "15s";
@@ -95,9 +126,6 @@
               ];
             };
           };
-          # settings.processes.tsx = {
-          #   command = "tsx --watch src/main.ts";
-          # };
         };
 
         devShells.default = pkgs.mkShell {
